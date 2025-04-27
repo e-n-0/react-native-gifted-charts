@@ -1684,6 +1684,46 @@ export const LineChart = (props: LineChartPropsType) => {
     }
   };
 
+  const whenOnResponderMove = (evt: any, activatePointers: (x: number) => void, pointerConfig: any, activatePointersOnLongPress: boolean, responderStartTime: number, activatePointersDelay: number, yAxisLabelWidth: number, props: any) => {
+    if (!pointerConfig) return;
+    if (
+      activatePointersOnLongPress &&
+      evt.timeStamp - responderStartTime < activatePointersDelay
+    ) {
+      // cancel the evt - (not sure it have any effect)
+      evt.preventDefault();
+      evt.stopPropagation();
+      //console.log('whenOnResponderMove cancel');
+      return;
+    } else {
+      pointerConfig.onResponderGrant?.();
+      setResponderActive(true);
+    }
+
+    let x = evt.nativeEvent.locationX;
+    let px = evt.nativeEvent.pageX;
+    if (yAxisLabelWidth != -1 && x == px) return;
+    if (
+      !activatePointersOnLongPress &&
+      x > (props.width || Dimensions.get('window').width)
+    )
+      return;
+    activatePointers(x);
+    pointerConfig?.onResponderMove?.();
+
+  };
+
+  const longPressTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasMovedRef = useRef(false); // Track if the user has moved before long press
+
+  const clearLongPressTimeout = () => {
+    if (longPressTimeoutRef.current) {
+      clearTimeout(longPressTimeoutRef.current);
+      longPressTimeoutRef.current = null;
+      //console.log('clearLongPressTimeout');
+    }
+  };
+
   const renderLine = (
     containerHeightIncludingBelowXAxis: number,
     zIndex: number,
@@ -1722,10 +1762,53 @@ export const LineChart = (props: LineChartPropsType) => {
     return (
       <View
         key={key ?? 0}
-        onPointerEnter={() => pointerConfig?.onPointerEnter?.()}
+        onPointerEnter={(evt) => {
+          //console.log('onPointerEnter', evt);
+          pointerConfig?.onPointerEnter?.();
+        }}
         onPointerLeave={() => pointerConfig?.onPointerLeave?.()}
-        onTouchStart={() => pointerConfig?.onTouchStart?.()}
-        onTouchEnd={() => pointerConfig?.onTouchEnd?.()}
+        onTouchStart={(evt) => {
+          //console.log('onTouchStart');
+          hasMovedRef.current = false; // Reset on touch start
+          clearLongPressTimeout();
+
+          if (activatePointersDelay > 0) {
+            evt.persist();
+            longPressTimeoutRef.current = setTimeout(() => {
+              if (!hasMovedRef.current) { // Only trigger if not moved
+                //console.log('onTouchStart setTimeout move');
+                whenOnResponderMove(
+                  evt,
+                  activatePointers,
+                  pointerConfig,
+                  activatePointersOnLongPress,
+                  responderStartTime,
+                  activatePointersDelay,
+                  yAxisLabelWidth,
+                  props
+                );
+
+                //console.log('onTouchStart setTimeout clearLongPressTimeout');
+                clearLongPressTimeout();
+              }
+              else {
+                //console.log('onTouchStart cancel setTimeout move hasMovedRef.current = true');
+              }
+            }, activatePointersDelay);
+          }
+          pointerConfig?.onTouchStart?.();
+        }}
+        onTouchEnd={() => {
+          //console.log('onTouchEnd');
+          clearLongPressTimeout();
+          hasMovedRef.current = true;
+          setResponderStartTime(0);
+          setResponderActive(false);
+          setPointerIndex(-1);
+          setTimeout(() => setPointerX(0), pointerVanishDelay);
+          pointerConfig?.onResponderEnd?.();
+          pointerConfig?.onTouchEnd?.();
+        }}
         onMoveShouldSetResponder={evt => (pointerConfig ? true : false)}
         onStartShouldSetResponder={evt =>
           pointerConfig && activatePointersInstantlyOnTouch ? true : false
@@ -1737,35 +1820,42 @@ export const LineChart = (props: LineChartPropsType) => {
             return;
           }
           let x = evt.nativeEvent.locationX;
+          //console.log('activatePointer');
           activatePointers(x);
           pointerConfig.onResponderGrant?.();
         }}
         onResponderMove={evt => {
-          if (!pointerConfig) return;
-          if (
-            activatePointersOnLongPress &&
-            evt.timeStamp - responderStartTime < activatePointersDelay
-          ) {
+          //console.log('onResponderMove');
+          if (longPressTimeoutRef.current) {
+            //console.log('onResponderMove clearLongPressTimeout + hasMovedRef.current = true');
+            clearLongPressTimeout(); // Cancel long press if moved
+            hasMovedRef.current = true; // Mark as moved
             return;
-          } else {
-            setResponderActive(true);
           }
-          let x = evt.nativeEvent.locationX;
-          let px = evt.nativeEvent.pageX;
-          if (yAxisLabelWidth != -1 && x == px) return; // if locationX and pageX are equal, it means pointer has gone out of the chart, but this is not the case when yAxisLabelWidth is -1
-          if (
-            !activatePointersOnLongPress &&
-            x > (props.width || Dimensions.get('window').width)
-          )
+
+          if (hasMovedRef.current) {
+            //console.log('onResponderMove hasMovedRef.current = true');
             return;
-          activatePointers(x);
-          pointerConfig?.onResponderMove?.();
+          }
+
+          whenOnResponderMove(
+            evt,
+            activatePointers,
+            pointerConfig,
+            activatePointersOnLongPress,
+            responderStartTime,
+            activatePointersDelay,
+            yAxisLabelWidth,
+            props
+          );
         }}
         // onResponderReject={evt => {
         //   console.log('evt...reject.......',evt);
         // }}
         onResponderEnd={evt => {
           setResponderStartTime(0);
+          clearLongPressTimeout();
+          //console.log('onResponderEnd clearLongPressTimeout');
           if (resetPointerIndexOnRelease) setPointerIndex(-1);
           setResponderActive(false);
           if (!persistPointer)
